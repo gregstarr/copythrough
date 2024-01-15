@@ -71,7 +71,7 @@ func main() {
 					rxBuffer.Write(data)
 					dec.Decode(&receivedMessage)
 					rxBuffer.Reset()
-					log.Println(receivedMessage)
+					log.Println(receivedMessage.String())
 					if receivedMessage.Origin == host {
 						continue
 					}
@@ -128,15 +128,15 @@ func main() {
 				log.Fatal(err)
 			}
 			txBuffer.Reset()
-			log.Println(msg)
+			log.Println(msg.String())
 		case data := <-imgChan:
-			msg := Message{host, clipboard.FmtText, data}
+			msg := Message{host, clipboard.FmtImage, data}
 			enc.Encode(msg)
 			if err := os.WriteFile(copyfile, txBuffer.Bytes(), 0644); err != nil {
 				log.Fatal(err)
 			}
 			txBuffer.Reset()
-			log.Println(msg)
+			log.Println(msg.String())
 		}
 	}
 }
