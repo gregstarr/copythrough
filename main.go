@@ -1,33 +1,26 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	pb "copythrough/message/github.com/gregstarr/copythrough"
 	"errors"
-	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"golang.design/x/clipboard"
+	"google.golang.org/protobuf/proto"
 	"log"
 	"os"
 	"path"
 	"time"
 )
 
-type Message struct {
-	Origin string
-	Format clipboard.Format
-	Data   []byte
-}
-
-func (m Message) String() string {
-	switch m.Format {
-	case clipboard.FmtText:
-		return fmt.Sprintf("%s: %s", m.Origin, string(m.Data))
-	case clipboard.FmtImage:
-		return fmt.Sprintf("%s: image", m.Origin)
+func convertFormat(format pb.Format) clipboard.Format {
+	switch format {
+	case pb.Format_TEXT:
+		return clipboard.FmtText
+	case pb.Format_IMAGE:
+		return clipboard.FmtImage
 	default:
-		return ""
+		return clipboard.FmtText
 	}
 }
 
@@ -50,9 +43,7 @@ func main() {
 	}
 	defer watcher.Close()
 
-	var rxBuffer bytes.Buffer
-	dec := gob.NewDecoder(&rxBuffer)
-	var receivedMessage Message
+	var receivedMessage pb.Message
 
 	// Start listening for events.
 	go func() {
@@ -68,14 +59,15 @@ func main() {
 						log.Fatal(err)
 					}
 					log.Println(event.Name)
-					rxBuffer.Write(data)
-					dec.Decode(&receivedMessage)
-					rxBuffer.Reset()
+					err = proto.Unmarshal(data, &receivedMessage)
+					if err != nil {
+						log.Fatal(err)
+					}
 					log.Println(receivedMessage.String())
 					if receivedMessage.Origin == host {
 						continue
 					}
-					clipboard.Write(receivedMessage.Format, receivedMessage.Data)
+					clipboard.Write(convertFormat(receivedMessage.Format), receivedMessage.Data)
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -87,7 +79,7 @@ func main() {
 	}()
 
 	err = watcher.Add(copyfile)
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Fatal(err)
 	}
 
@@ -117,25 +109,38 @@ func main() {
 
 	textChan := clipboard.Watch(context.Background(), clipboard.FmtText)
 	imgChan := clipboard.Watch(context.Background(), clipboard.FmtImage)
-	var txBuffer bytes.Buffer
-	enc := gob.NewEncoder(&txBuffer)
 	for {
 		select {
 		case data := <-textChan:
-			msg := Message{host, clipboard.FmtText, data}
-			enc.Encode(msg)
-			if err := os.WriteFile(copyfile, txBuffer.Bytes(), 0644); err != nil {
+			msg := pb.Message{
+				Origin: host,
+				Format: pb.Format_TEXT,
+				Data:   data,
+			}
+			out, err := proto.Marshal(&msg)
+			if err != nil {
 				log.Fatal(err)
 			}
-			txBuffer.Reset()
+			if err := os.WriteFile(copyfile, out, 0644); err != nil {
+				log.Fatal(err)
+			}
 			log.Println(msg.String())
 		case data := <-imgChan:
-			msg := Message{host, clipboard.FmtImage, data}
-			enc.Encode(msg)
-			if err := os.WriteFile(copyfile, txBuffer.Bytes(), 0644); err != nil {
+			msg := pb.Message{
+				Origin: host,
+				Format: pb.Format_IMAGE,
+				Data:   data,
+			}
+			if err != nil {
 				log.Fatal(err)
 			}
-			txBuffer.Reset()
+			out, err := proto.Marshal(&msg)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := os.WriteFile(copyfile, out, 0644); err != nil {
+				log.Fatal(err)
+			}
 			log.Println(msg.String())
 		}
 	}

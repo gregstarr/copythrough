@@ -1,0 +1,14 @@
+syntax = "proto3";
+package copythrough;
+option go_package = "github.com/gregstarr/copythrough";
+
+message Message {
+  string origin = 1;
+  Format format = 2;  // Unique ID number for this person.
+  bytes data = 3;
+}
+
+enum Format {
+  TEXT = 0;
+  IMAGE = 1;
+}
