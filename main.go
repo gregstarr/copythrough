@@ -33,7 +33,7 @@ func (m Message) String() string {
 
 func main() {
 	dir := os.Args[1]
-	copyfile := path.Join(dir, "copythrough")
+	copyfile := path.Join(dir, ".COPYTHROUGH")
 
 	if err := clipboard.Init(); err != nil {
 		log.Fatal(err)
@@ -122,19 +122,21 @@ func main() {
 	for {
 		select {
 		case data := <-textChan:
-			enc.Encode(Message{host, clipboard.FmtText, data})
+			msg := Message{host, clipboard.FmtText, data}
+			enc.Encode(msg)
 			if err := os.WriteFile(copyfile, txBuffer.Bytes(), 0644); err != nil {
 				log.Fatal(err)
 			}
 			txBuffer.Reset()
-			log.Println(receivedMessage)
+			log.Println(msg)
 		case data := <-imgChan:
-			enc.Encode(Message{host, clipboard.FmtImage, data})
+			msg := Message{host, clipboard.FmtText, data}
+			enc.Encode(msg)
 			if err := os.WriteFile(copyfile, txBuffer.Bytes(), 0644); err != nil {
 				log.Fatal(err)
 			}
 			txBuffer.Reset()
-			log.Println(receivedMessage)
+			log.Println(msg)
 		}
 	}
 }
