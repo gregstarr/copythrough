@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"golang.design/x/clipboard"
 	"log"
 	"os"
 	"path"
+	"time"
 )
 
 type Message struct {
@@ -65,6 +67,7 @@ func main() {
 					if err != nil {
 						log.Fatal(err)
 					}
+					log.Println(event.Name)
 					rxBuffer.Write(data)
 					dec.Decode(&receivedMessage)
 					rxBuffer.Reset()
@@ -87,6 +90,30 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	go func() {
+		laststatus := false
+		_, err := os.Stat(copyfile)
+		if err == nil {
+			laststatus = false
+		}
+		for {
+			_, err := os.Stat(copyfile)
+			if err != nil && errors.Is(err, os.ErrNotExist) {
+				// file not exist
+				laststatus = false
+			}
+			if err == nil && laststatus == false {
+				watcher.Events <- fsnotify.Event{"USB Plugged In", fsnotify.Write}
+			}
+			if err == nil {
+				laststatus = true
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
+
+	watcher.Events <- fsnotify.Event{"Greg", 0}
 
 	textChan := clipboard.Watch(context.Background(), clipboard.FmtText)
 	imgChan := clipboard.Watch(context.Background(), clipboard.FmtImage)
