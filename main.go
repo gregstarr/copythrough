@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	pb "copythrough/message/github.com/gregstarr/copythrough"
 	"errors"
-	"fmt"
+	"flag"
 	"golang.design/x/clipboard"
 	"google.golang.org/protobuf/proto"
 	"log"
@@ -18,13 +17,14 @@ var (
 	copyfile        string
 	receivedMessage pb.Message
 	host            string
+	pollInterval    time.Duration
 )
 
 func printMessage(msg *pb.Message) {
 	if msg.Format == pb.Format_TEXT {
-		fmt.Printf("%s: %s\n", msg.Origin, string(msg.Data))
+		log.Printf("%s: %s\n", msg.Origin, string(msg.Data))
 	} else {
-		fmt.Printf("%s: image\n", msg.Origin)
+		log.Printf("%s: image\n", msg.Origin)
 	}
 }
 
@@ -39,25 +39,23 @@ func convertFormat(format pb.Format) clipboard.Format {
 	}
 }
 
-func readCopyFile(selfChan *chan []byte) error {
+func readCopyFile() {
 	data, err := os.ReadFile(copyfile)
 	if err != nil {
-		return err
+		log.Fatal("Can't read copyfile:", err)
 	}
 	err = proto.Unmarshal(data, &receivedMessage)
 	if err != nil {
-		return err
+		log.Fatal("Can't parse copyfile into protobuf:", err)
 	}
 	printMessage(&receivedMessage)
 	if receivedMessage.Origin == host {
-		return nil
+		return
 	}
-	*selfChan <- receivedMessage.Data
 	clipboard.Write(convertFormat(receivedMessage.Format), receivedMessage.Data)
-	return nil
 }
 
-func writeCopyFile(data *[]byte, format pb.Format) error {
+func writeCopyFile(data *[]byte, format pb.Format) {
 	var (
 		out []byte
 		err error
@@ -67,45 +65,47 @@ func writeCopyFile(data *[]byte, format pb.Format) error {
 		Format: format,
 		Data:   *data,
 	}
-	out, err = proto.Marshal(&msg)
-	if err != nil {
-		return err
+	if out, err = proto.Marshal(&msg); err != nil {
+		log.Fatal("can't marshal protobuf:", err)
 	}
 	if err = os.WriteFile(copyfile, out, 0644); err != nil {
-		return err
+		log.Fatal("can't write copyfile:", err)
 	}
 	printMessage(&msg)
-	return nil
 }
 
-func watchFile(selfChan *chan []byte) {
+func watchFile() {
 	var err error
-	laststatus := true
+	lastStatus := true
 	_, err = os.Stat(copyfile)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
-		laststatus = false
+	if errors.Is(err, os.ErrNotExist) {
+		lastStatus = false
+	} else if err != nil {
+		log.Fatal("os stat error:", err)
 	}
 	for {
 		_, err = os.Stat(copyfile)
-		if err != nil && errors.Is(err, os.ErrNotExist) {
-			// file not exist
-			laststatus = false
-		}
-		if err == nil && laststatus == false {
-			if err = readCopyFile(selfChan); err != nil {
-				log.Fatal(err)
-			}
-		}
 		if err == nil {
-			laststatus = true
+			if lastStatus == false {
+				readCopyFile()
+			}
+			lastStatus = true
+		} else if errors.Is(err, os.ErrNotExist) {
+			// file not exist
+			lastStatus = false
+		} else {
+			log.Fatal("os stat error:", err)
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 }
 
 func init() {
-	dir := os.Args[1]
-	copyfile = path.Join(dir, ".COPYTHROUGH")
+	dir := flag.String("d", "D:", "directory to copy through (USB drive)")
+	flag.DurationVar(&pollInterval, "poll", 250*time.Millisecond, "polling interval in ms")
+	flag.Parse()
+
+	copyfile = path.Join(*dir, ".COPYTHROUGH")
 
 	var err error
 	if err = clipboard.Init(); err != nil {
@@ -119,35 +119,20 @@ func init() {
 }
 
 func main() {
-	var (
-		err  error
-		data []byte
-	)
+	var data []byte
+	log.Printf("running copythrough on %s through %s...\n", host, copyfile)
 
-	selfChan := make(chan []byte)
-
-	go watchFile(&selfChan)
+	go watchFile()
 
 	textChan := clipboard.Watch(context.Background(), clipboard.FmtText)
 	imgChan := clipboard.Watch(context.Background(), clipboard.FmtImage)
 
 	for {
 		select {
-		case data = <-selfChan:
-			err = writeCopyFile(&data, pb.Format_TEXT)
-		case d := <-textChan:
-			if bytes.Equal(d, data) {
-				continue
-			}
-			err = writeCopyFile(&d, pb.Format_TEXT)
-		case d := <-imgChan:
-			if bytes.Equal(d, data) {
-				continue
-			}
-			err = writeCopyFile(&d, pb.Format_IMAGE)
-		}
-		if err != nil {
-			log.Fatal(err)
+		case data = <-textChan:
+			writeCopyFile(&data, pb.Format_TEXT)
+		case data = <-imgChan:
+			writeCopyFile(&data, pb.Format_IMAGE)
 		}
 	}
 }
