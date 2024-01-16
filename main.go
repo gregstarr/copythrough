@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	pb "copythrough/message/github.com/gregstarr/copythrough"
 	"errors"
@@ -38,7 +39,7 @@ func convertFormat(format pb.Format) clipboard.Format {
 	}
 }
 
-func readCopyFile() error {
+func readCopyFile(selfChan *chan []byte) error {
 	data, err := os.ReadFile(copyfile)
 	if err != nil {
 		return err
@@ -51,6 +52,7 @@ func readCopyFile() error {
 	if receivedMessage.Origin == host {
 		return nil
 	}
+	*selfChan <- receivedMessage.Data
 	clipboard.Write(convertFormat(receivedMessage.Format), receivedMessage.Data)
 	return nil
 }
@@ -76,7 +78,32 @@ func writeCopyFile(data *[]byte, format pb.Format) error {
 	return nil
 }
 
-func main() {
+func watchFile(selfChan *chan []byte) {
+	var err error
+	laststatus := true
+	_, err = os.Stat(copyfile)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		laststatus = false
+	}
+	for {
+		_, err = os.Stat(copyfile)
+		if err != nil && errors.Is(err, os.ErrNotExist) {
+			// file not exist
+			laststatus = false
+		}
+		if err == nil && laststatus == false {
+			if err = readCopyFile(selfChan); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if err == nil {
+			laststatus = true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func init() {
 	dir := os.Args[1]
 	copyfile = path.Join(dir, ".COPYTHROUGH")
 
@@ -89,39 +116,35 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
 
-	go func() {
-		laststatus := true
-		_, err = os.Stat(copyfile)
-		if err != nil && errors.Is(err, os.ErrNotExist) {
-			laststatus = false
-		}
-		for {
-			_, err = os.Stat(copyfile)
-			if err != nil && errors.Is(err, os.ErrNotExist) {
-				// file not exist
-				laststatus = false
-			}
-			if err == nil && laststatus == false {
-				if err = readCopyFile(); err != nil {
-					log.Fatal(err)
-				}
-			}
-			if err == nil {
-				laststatus = true
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-	}()
+func main() {
+	var (
+		err  error
+		data []byte
+	)
+
+	selfChan := make(chan []byte)
+
+	go watchFile(&selfChan)
 
 	textChan := clipboard.Watch(context.Background(), clipboard.FmtText)
 	imgChan := clipboard.Watch(context.Background(), clipboard.FmtImage)
+
 	for {
 		select {
-		case data := <-textChan:
+		case data = <-selfChan:
 			err = writeCopyFile(&data, pb.Format_TEXT)
-		case data := <-imgChan:
-			err = writeCopyFile(&data, pb.Format_IMAGE)
+		case d := <-textChan:
+			if bytes.Equal(d, data) {
+				continue
+			}
+			err = writeCopyFile(&d, pb.Format_TEXT)
+		case d := <-imgChan:
+			if bytes.Equal(d, data) {
+				continue
+			}
+			err = writeCopyFile(&d, pb.Format_IMAGE)
 		}
 		if err != nil {
 			log.Fatal(err)
